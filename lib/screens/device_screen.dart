@@ -52,7 +52,31 @@ class _DeviceScreenState extends State<DeviceScreen> {
             ),
           ],
         ),
-        body: IndexedStack(index: _tab, children: _bodies),
+        body: Column(
+          children: [
+            if (ble.error != null)
+              Material(
+                color: Colors.red.withAlpha(38),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.error_outline,
+                          color: Colors.red, size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(ble.error!,
+                            style: const TextStyle(
+                                color: Colors.red, fontSize: 11)),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            Expanded(child: IndexedStack(index: _tab, children: _bodies)),
+          ],
+        ),
         bottomNavigationBar: BottomNavigationBar(
           currentIndex: _tab,
           onTap: (i) => setState(() => _tab = i),

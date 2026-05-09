@@ -33,10 +33,12 @@ class BleService extends ChangeNotifier {
   BluetoothCharacteristic? _cfgChar;
   BluetoothCharacteristic? _statusChar;
   BluetoothCharacteristic? _infoChar;
+  BluetoothCharacteristic? _batteryChar;
 
   // ── Data ──────────────────────────────────────────────────────────────────
   StatusData? _status;
   InfoData?   _infoData;
+  int?        _batteryLevel;
   final ImuChartData _imuChartData = ImuChartData();
   List<double> _audioSamples = [];
 
@@ -55,6 +57,7 @@ class BleService extends ChangeNotifier {
   StreamSubscription<List<int>>? _imuSub;
   StreamSubscription<List<int>>? _audioSub;
   StreamSubscription<List<int>>? _statusSub;
+  StreamSubscription<List<int>>? _batterySub;
 
   // ── Getters ───────────────────────────────────────────────────────────────
   bool               get isScanning    => _isScanning;
@@ -67,6 +70,7 @@ class BleService extends ChangeNotifier {
   InfoData?          get infoData      => _infoData;
   ImuChartData       get imuChartData  => _imuChartData;
   List<double>       get audioSamples  => List.unmodifiable(_audioSamples);
+  int?               get batteryLevel  => _batteryLevel;
   String?            get error         => _error;
 
   // ── Scan ──────────────────────────────────────────────────────────────────
@@ -130,15 +134,19 @@ class BleService extends ChangeNotifier {
       final services = await device.discoverServices();
       await _setupCharacteristics(services);
       await readStatus();
+      debugPrint('[FOCUS] readStatus done: status=$_status');
       await readInfo();
+      debugPrint('[FOCUS] readInfo done: infoData=$_infoData');
 
-      // Re-enable streams if the firmware's persisted config left them off.
-      if (_status == null || !_status!.imuActive || !_status!.audioActive) {
-        await sendCmd(0x03); // bit0 = IMU, bit1 = Audio
-      }
+      // Always explicitly enable both streams on every fresh connection.
+      // Do not rely on STATUS flags — the firmware needs the CMD write to
+      // actually start BLE notifications even if its NVM says streams are on.
+      await sendCmd(0x03); // bit0 = IMU, bit1 = Audio
+      debugPrint('[FOCUS] sendCmd(0x03) done, error=$_error');
     } catch (e) {
       _error = e.toString();
       _device = null;
+      debugPrint('[FOCUS] connect() failed: $e');
       notifyListeners();
     }
   }
@@ -170,11 +178,21 @@ class BleService extends ChangeNotifier {
   }
 
   Future<void> _setupCharacteristics(List<BluetoothService> services) async {
+    debugPrint('[FOCUS] Discovered ${services.length} services:');
+    for (final s in services) {
+      debugPrint('[FOCUS]   svc ${s.serviceUuid}');
+    }
+
     final svc = services.firstWhere(
       (s) => s.serviceUuid.toString().toLowerCase() ==
           BleConstants.serviceUuid.toLowerCase(),
       orElse: () => throw Exception('FOCUS-Sense service not found'),
     );
+
+    debugPrint('[FOCUS] Custom service found, characteristics:');
+    for (final c in svc.characteristics) {
+      debugPrint('[FOCUS]   chr ${c.characteristicUuid}');
+    }
 
     // Collect characteristics first, then subscribe sequentially.
     // Android BLE stack requires each CCCD write to complete (onDescriptorWrite)
@@ -197,18 +215,43 @@ class BleService extends ChangeNotifier {
       }
     }
 
+    debugPrint('[FOCUS] Matched: imu=${imuChar != null} audio=${audioChar != null} '
+        'cmd=${_cmdChar != null} cfg=${_cfgChar != null} '
+        'status=${statusChar != null} info=${_infoChar != null}');
+
     if (imuChar != null) {
       _imuSub = imuChar.onValueReceived.listen(_onImuData);
       await imuChar.setNotifyValue(true);
+      debugPrint('[FOCUS] IMU notify enabled');
     }
     if (audioChar != null) {
       _audioSub = audioChar.onValueReceived.listen(_onAudioData);
       await audioChar.setNotifyValue(true);
+      debugPrint('[FOCUS] Audio notify enabled');
     }
     if (statusChar != null) {
       _statusChar = statusChar;
       _statusSub = statusChar.onValueReceived.listen(_onStatusData);
       await statusChar.setNotifyValue(true);
+      debugPrint('[FOCUS] Status notify enabled');
+    }
+
+    // BLE Battery Service (0x180F / 0x2A19) — standard, separate from custom svc
+    for (final s in services) {
+      if (!s.serviceUuid.toString().toLowerCase().contains('180f')) continue;
+      for (final c in s.characteristics) {
+        if (!c.characteristicUuid.toString().toLowerCase().contains('2a19')) continue;
+        try {
+          _batteryChar = c;
+          _batterySub = c.onValueReceived.listen(_onBatteryData);
+          await c.setNotifyValue(true);
+          try { _onBatteryData(await c.read()); } catch (_) {}
+        } catch (_) {
+          _batterySub?.cancel();
+          _batterySub = null;
+          _batteryChar = null;
+        }
+      }
     }
 
     notifyListeners();
@@ -262,6 +305,12 @@ class BleService extends ChangeNotifier {
       _lastAudioUi = now;
       notifyListeners();
     }
+  }
+
+  void _onBatteryData(List<int> value) {
+    if (value.isEmpty) return;
+    _batteryLevel = value[0].clamp(0, 100);
+    notifyListeners();
   }
 
   void _onStatusData(List<int> value) {
@@ -348,17 +397,20 @@ class BleService extends ChangeNotifier {
   }
 
   void _teardown() {
-    _mtuSub?.cancel();    _mtuSub = null;
-    _imuSub?.cancel();    _imuSub = null;
-    _audioSub?.cancel();  _audioSub = null;
-    _statusSub?.cancel(); _statusSub = null;
-    _connSub?.cancel();   _connSub = null;
+    _mtuSub?.cancel();     _mtuSub = null;
+    _imuSub?.cancel();     _imuSub = null;
+    _audioSub?.cancel();   _audioSub = null;
+    _statusSub?.cancel();  _statusSub = null;
+    _batterySub?.cancel(); _batterySub = null;
+    _connSub?.cancel();    _connSub = null;
     _cmdChar = null;
     _cfgChar = null;
     _statusChar = null;
     _infoChar = null;
+    _batteryChar = null;
     _status = null;
     _infoData = null;
+    _batteryLevel = null;
     _imuChartData.clear();
     _audioSamples = [];
     _connectionState = BluetoothConnectionState.disconnected;

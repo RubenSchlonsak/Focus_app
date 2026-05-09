@@ -32,6 +32,22 @@ class _ConnectionCard extends StatelessWidget {
   final BleService ble;
   const _ConnectionCard({required this.ble});
 
+  static IconData _batteryIcon(int pct) {
+    if (pct >= 95) return Icons.battery_full;
+    if (pct >= 80) return Icons.battery_6_bar;
+    if (pct >= 60) return Icons.battery_5_bar;
+    if (pct >= 40) return Icons.battery_4_bar;
+    if (pct >= 20) return Icons.battery_2_bar;
+    if (pct >= 10) return Icons.battery_1_bar;
+    return Icons.battery_alert;
+  }
+
+  static Color _batteryColor(int pct) {
+    if (pct >= 40) return const Color(0xFF00E5CC);
+    if (pct >= 20) return Colors.orangeAccent;
+    return Colors.redAccent;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -47,14 +63,21 @@ class _ConnectionCard extends StatelessWidget {
                 Container(
                   width: 10,
                   height: 10,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFF00E5CC),
+                  decoration: BoxDecoration(
+                    color: ble.isConnected
+                        ? const Color(0xFF00E5CC)
+                        : Colors.red,
                     shape: BoxShape.circle,
                   ),
                 ),
                 const SizedBox(width: 8),
-                const Text('Verbunden',
-                    style: TextStyle(color: Color(0xFF00E5CC))),
+                Text(
+                  ble.isConnected ? 'Verbunden' : 'Getrennt',
+                  style: TextStyle(
+                      color: ble.isConnected
+                          ? const Color(0xFF00E5CC)
+                          : Colors.red),
+                ),
               ],
             ),
             const SizedBox(height: 8),
@@ -74,6 +97,18 @@ class _ConnectionCard extends StatelessWidget {
                 ),
               ),
             ]),
+            if (ble.batteryLevel != null) ...[
+              const SizedBox(height: 8),
+              Row(children: [
+                Icon(_batteryIcon(ble.batteryLevel!), size: 16,
+                    color: _batteryColor(ble.batteryLevel!)),
+                const SizedBox(width: 6),
+                Text('${ble.batteryLevel}%',
+                    style: TextStyle(
+                        color: _batteryColor(ble.batteryLevel!),
+                        fontSize: 13)),
+              ]),
+            ],
             const SizedBox(height: 14),
             SizedBox(
               width: double.infinity,
