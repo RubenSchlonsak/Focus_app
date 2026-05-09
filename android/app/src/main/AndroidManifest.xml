@@ -1,0 +1,112 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+          xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- ── Hardware features ─────────────────────────────────────────────── -->
+    <uses-feature android:name="android.hardware.bluetooth_le"  android:required="true"/>
+    <uses-feature android:name="android.hardware.microphone"    android:required="false"/>
+
+    <!-- ── Bluetooth ─────────────────────────────────────────────────────── -->
+    <!-- Android ≤ 11 (API 30) -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30"/>
+
+    <!-- Android 12+ (API 31+) — neverForLocation: kein Location-Grant nötig -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"/>
+
+    <!-- Location: BLE-Scan auf Android < 12 erfordert Location -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+
+    <!-- ── Audio ─────────────────────────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+
+    <!-- ── Speicher ───────────────────────────────────────────────────────── -->
+    <!-- Android ≤ 9 (API 28) -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28"/>
+    <!-- Android ≤ 12 (API 32) -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32"/>
+    <!-- Android 13+ (API 33+) -->
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"
+        tools:targetApi="33"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"
+        tools:targetApi="33"/>
+
+    <!-- ── Foreground Service ─────────────────────────────────────────────── -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <!-- API 34+: Typ-spezifische Permissions für Foreground Services -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
+        tools:targetApi="34"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"
+        tools:targetApi="34"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"
+        tools:targetApi="34"/>
+
+    <!-- ── Wakelock + Akku ───────────────────────────────────────────────── -->
+    <!-- Verhindert dass CPU während Aufnahme schläft -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <!-- Erlaubt dem Nutzer, App von Doze-Modus auszunehmen -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+
+    <!-- ── Vibration (optional für Feedback) ─────────────────────────────── -->
+    <uses-permission android:name="android.permission.VIBRATE"/>
+
+    <!-- ── Netzwerk (flutter_foreground_task + Share benötigt es) ─────────── -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+    <application
+        android:label="FOCUS-Sense"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:requestLegacyExternalStorage="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme"/>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <!-- Foreground Service für BLE + Audio während Aufnahme -->
+        <!-- connectedDevice = Bluetooth/BLE (API 34+)           -->
+        <!-- microphone      = Audio-Aufnahme                    -->
+        <!-- dataSync        = Allgemeiner Datentransfer         -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="connectedDevice|microphone|dataSync"
+            android:exported="false"/>
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2"/>
+    </application>
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+        </intent>
+    </queries>
+</manifest>
