@@ -30,8 +30,9 @@ class RecordingService extends ChangeNotifier {
   // ── Data buffers ──────────────────────────────────────────────────────────
   // [timestamp_ms, ax, ay, az, gx, gy, gz]
   final List<List<double>> _imuSamples = [];
-  // Raw int16 PCM bytes
-  final List<int> _audioPcmBytes = [];
+  // Audio stored as Uint8List chunks — avoids the ~8× memory blow-up of List<int>
+  final List<Uint8List> _audioChunks = [];
+  int _audioPcmByteCount = 0;
   final List<SessionMarker> _markers = [];
 
   // ── Live-preview for RecordingScreen ─────────────────────────────────────
@@ -202,7 +203,7 @@ class RecordingService extends ChangeNotifier {
   }
 
   void _addMarker({required bool isCorrection}) {
-    final ms = DateTime.now().difference(_startTime!).inMilliseconds;
+    final ms = elapsed.inMilliseconds;
     _markers.add(SessionMarker(
       timestampMs: ms,
       surfaceIndex: _surfaceIdx,
