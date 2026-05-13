@@ -6,34 +6,86 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/study_session.dart';
+import '../models/surface_label_list.dart';
 
 class StudyManager extends ChangeNotifier {
-  static const _prefKey = 'focus_surfaces';
+  static const _prefKey      = 'focus_surfaces';
+  static const _listsKey     = 'focus_surface_lists';
 
   static const _defaultSurfaces = [
-    'Asphalt',
-    'Beton',
-    'Kopfsteinpflaster',
-    'Gras',
-    'Waldboden',
-    'Kies',
-    'Fliesen',
-    'Teppich',
-    'Holzparkett',
-    'Sand',
+    'Asphalt', 'Beton', 'Kopfsteinpflaster', 'Gras',
+    'Waldboden', 'Kies', 'Fliesen', 'Teppich', 'Holzparkett', 'Sand',
+  ];
+
+  static const _defaultLabelLists = [
+    {
+      'name': 'Standard',
+      'surfaces': [
+        'Schotter', 'Sand', 'Asphalt', 'Gehweg',
+        'Kopfsteinpflaster', 'Dirt Road', 'Gras',
+      ],
+    }
   ];
 
   List<String> _surfaces = List.from(_defaultSurfaces);
+  List<SurfaceLabelList> _labelLists = [];
 
   List<String> get surfaces => List.unmodifiable(_surfaces);
+  List<SurfaceLabelList> get labelLists => List.unmodifiable(_labelLists);
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
+
     final saved = prefs.getStringList(_prefKey);
     if (saved != null && saved.isNotEmpty) {
       _surfaces = saved;
-      notifyListeners();
     }
+
+    final listsJson = prefs.getString(_listsKey);
+    if (listsJson != null) {
+      try {
+        final decoded = jsonDecode(listsJson) as List;
+        _labelLists = decoded
+            .map((e) => SurfaceLabelList.fromJson(e as Map<String, dynamic>))
+            .toList();
+      } catch (_) {}
+    }
+    if (_labelLists.isEmpty) {
+      _labelLists = _defaultLabelLists
+          .map((m) => SurfaceLabelList.fromJson(Map<String, dynamic>.from(m)))
+          .toList();
+    }
+
+    notifyListeners();
+  }
+
+  // ── Label list CRUD ───────────────────────────────────────────────────────
+
+  void addLabelList(String name, List<String> surfaces) {
+    _labelLists.add(SurfaceLabelList(name: name.trim(), surfaces: List.from(surfaces)));
+    _saveLists();
+    notifyListeners();
+  }
+
+  void updateLabelList(int index, String name, List<String> surfaces) {
+    _labelLists[index] =
+        SurfaceLabelList(name: name.trim(), surfaces: List.from(surfaces));
+    _saveLists();
+    notifyListeners();
+  }
+
+  void deleteLabelList(int index) {
+    _labelLists.removeAt(index);
+    _saveLists();
+    notifyListeners();
+  }
+
+  Future<void> _saveLists() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _listsKey,
+      jsonEncode(_labelLists.map((l) => l.toJson()).toList()),
+    );
   }
 
   void addSurface(String name) {

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../services/study_manager.dart';
 import '../viewer/session_browser_screen.dart';
+import 'label_lists_screen.dart';
 import 'subject_form_screen.dart';
 import 'surface_editor_screen.dart';
 
@@ -44,6 +45,18 @@ class StudyTab extends StatelessWidget {
               onTap: () => Navigator.push(
                 context,
                 MaterialPageRoute(builder: (_) => const SessionBrowserScreen()),
+              ),
+            ),
+            const SizedBox(height: 14),
+            _ActionCard(
+              icon: Icons.list_alt,
+              iconColor: Colors.orangeAccent,
+              title: 'Untergrund-Listen',
+              subtitle: 'Benannte Listen anlegen und beim Aufnahme-Setup laden',
+              buttonLabel: 'Verwalten',
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const LabelListsScreen()),
               ),
             ),
             const SizedBox(height: 20),

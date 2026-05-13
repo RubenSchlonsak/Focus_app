@@ -34,6 +34,8 @@ class RecordingService extends ChangeNotifier {
   final List<Uint8List> _audioChunks = [];
   int _audioPcmByteCount = 0;
   final List<SessionMarker> _markers = [];
+  // Pause/resume events (timestamps in elapsed/net-time ms)
+  final List<Map<String, int>> _pauseEvents = [];
 
   // ── Live-preview for RecordingScreen ─────────────────────────────────────
   final List<double> _recentAz = [];
@@ -60,7 +62,7 @@ class RecordingService extends ChangeNotifier {
   String?  get nextSurfaceName   => _surfaceIdx < _surfaces.length - 1 ? _surfaces[_surfaceIdx + 1] : null;
   List<String> get surfaces      => List.unmodifiable(_surfaces);
   int      get imuSampleCount    => _imuSamples.length;
-  int      get audioSampleCount  => _audioPcmBytes.length ~/ 2;
+  int      get audioSampleCount  => _audioPcmByteCount ~/ 2;
   List<double> get recentAz      => List.unmodifiable(_recentAz);
   double   get audioLevel        => _audioLevel;
   List<SessionMarker> get markers => List.unmodifiable(_markers);
@@ -93,8 +95,10 @@ class RecordingService extends ChangeNotifier {
     _deviceMtu = ble.mtu;
 
     _imuSamples.clear();
-    _audioPcmBytes.clear();
+    _audioChunks.clear();
+    _audioPcmByteCount = 0;
     _markers.clear();
+    _pauseEvents.clear();
     _recentAz.clear();
     _firstDeviceUs = null;
     _isPaused = false;
@@ -166,7 +170,9 @@ class RecordingService extends ChangeNotifier {
       final abs = s.abs();
       if (abs > peak) peak = abs.toDouble();
     }
-    _audioPcmBytes.addAll(pcm.buffer.asUint8List());
+    final chunk = Uint8List.fromList(pcm.buffer.asUint8List());
+    _audioChunks.add(chunk);
+    _audioPcmByteCount += chunk.length;
     _audioLevel = peak / 32768.0;
     _throttledNotify();
   }
@@ -215,8 +221,12 @@ class RecordingService extends ChangeNotifier {
   // ── Pause / Resume ────────────────────────────────────────────────────────
   void pauseRecording() {
     if (!_isRecording || _isPaused) return;
+    final pauseAtMs = elapsed.inMilliseconds;
     _isPaused = true;
     _pauseStart = DateTime.now();
+    // start_ms: when the pause began in elapsed/net-time (marker-aligned)
+    // duration_ms: wall-clock pause length (filled on resume)
+    _pauseEvents.add({'start_ms': pauseAtMs, 'duration_ms': -1});
     _ticker?.cancel();
     _ticker = null;
     _imuSub?.cancel();  _imuSub = null;
@@ -226,7 +236,11 @@ class RecordingService extends ChangeNotifier {
 
   void resumeRecording(BleService ble) {
     if (!_isRecording || !_isPaused) return;
-    _totalPausedDuration += DateTime.now().difference(_pauseStart!);
+    final pauseDur = DateTime.now().difference(_pauseStart!).inMilliseconds;
+    _totalPausedDuration += Duration(milliseconds: pauseDur);
+    if (_pauseEvents.isNotEmpty && _pauseEvents.last['duration_ms'] == -1) {
+      _pauseEvents.last['duration_ms'] = pauseDur;
+    }
     _isPaused = false;
     _pauseStart = null;
     _imuSub  = ble.imuStream.listen(_onImuData);
@@ -235,12 +249,38 @@ class RecordingService extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Compute IMU integrity stats (gaps detected, stripped duration in ms).
+  ({int gapCount, int totalGapMs, int strippedLastTsMs}) _imuIntegrity() {
+    if (_imuSamples.isEmpty) return (gapCount: 0, totalGapMs: 0, strippedLastTsMs: 0);
+    final gapThresholdMs = 500.0;
+    final nominalStepMs = 1000.0 / _imuRateHz;
+    int gaps = 0;
+    int totalGap = 0;
+    double offset = 0;
+    for (int i = 1; i < _imuSamples.length; i++) {
+      final gap = _imuSamples[i][0] - _imuSamples[i - 1][0];
+      if (gap > gapThresholdMs) {
+        gaps++;
+        totalGap += (gap - nominalStepMs).round();
+        offset += gap - nominalStepMs;
+      }
+    }
+    final last = (_imuSamples.last[0] - offset).toInt();
+    return (gapCount: gaps, totalGapMs: totalGap, strippedLastTsMs: last);
+  }
+
   // ── Stop & Save ───────────────────────────────────────────────────────────
   Future<StudySession> stopAndSave({
     required String name,
     required String folder,
   }) async {
     final durationMs = elapsed.inMilliseconds; // capture before teardown
+    // Close any open pause event (stopped while paused)
+    if (_isPaused && _pauseStart != null && _pauseEvents.isNotEmpty
+        && _pauseEvents.last['duration_ms'] == -1) {
+      _pauseEvents.last['duration_ms'] =
+          DateTime.now().difference(_pauseStart!).inMilliseconds;
+    }
     _ticker?.cancel();
     await _imuSub?.cancel();
     await _audioSub?.cancel();
@@ -268,7 +308,7 @@ class RecordingService extends ChangeNotifier {
       surfaces: _surfaces,
       markers: List.from(_markers),
       imuSampleCount: _imuSamples.length,
-      audioSampleCount: _audioPcmBytes.length ~/ 2,
+      audioSampleCount: _audioPcmByteCount ~/ 2,
       imuRateHz: _imuRateHz,
       audioSampleRate: _audioSampleRate,
     );
@@ -306,18 +346,41 @@ class RecordingService extends ChangeNotifier {
       surfaces: _surfaces,
       markers: List.from(_markers),
       imuSampleCount: _imuSamples.length,
-      audioSampleCount: _audioPcmBytes.length ~/ 2,
+      audioSampleCount: _audioPcmByteCount ~/ 2,
       imuRateHz: _imuRateHz,
       audioSampleRate: _audioSampleRate,
     );
+    final json = session.toJson();
+    json['pause_events'] = List<Map<String, int>>.from(_pauseEvents);
+    final stats = _imuIntegrity();
+    json['integrity'] = {
+      'pause_event_count': _pauseEvents.length,
+      'imu_gap_count': stats.gapCount,
+      'imu_total_gap_ms': stats.totalGapMs,
+      'imu_stripped_duration_ms': stats.strippedLastTsMs,
+      'audio_duration_ms':
+          ((_audioPcmByteCount ~/ 2) * 1000) ~/ _audioSampleRate,
+      'elapsed_duration_ms': durationMs,
+    };
     await File('$dir/metadata.json')
-        .writeAsString(const JsonEncoder.withIndent('  ').convert(session.toJson()));
+        .writeAsString(const JsonEncoder.withIndent('  ').convert(json));
   }
 
   Future<void> _writeImuCsv(String dir) async {
     final sb = StringBuffer('timestamp_ms,ax_g,ay_g,az_g,gx_dps,gy_dps,gz_dps\n');
-    for (final row in _imuSamples) {
-      sb.write('${row[0].toInt()},'
+    double offset = 0;
+    final gapThresholdMs = 500.0;
+    final nominalStepMs = 1000.0 / _imuRateHz;
+    for (int i = 0; i < _imuSamples.length; i++) {
+      final row = _imuSamples[i];
+      if (i > 0) {
+        final gap = row[0] - _imuSamples[i - 1][0];
+        if (gap > gapThresholdMs) {
+          offset += gap - nominalStepMs;
+        }
+      }
+      final ts = (row[0] - offset).toInt();
+      sb.write('$ts,'
           '${row[1].toStringAsFixed(5)},'
           '${row[2].toStringAsFixed(5)},'
           '${row[3].toStringAsFixed(5)},'
@@ -329,8 +392,13 @@ class RecordingService extends ChangeNotifier {
   }
 
   Future<void> _writeAudioWav(String dir) async {
-    final wavBytes = _buildWav(_audioPcmBytes, _audioSampleRate);
-    await File('$dir/audio.wav').writeAsBytes(wavBytes);
+    final sink = File('$dir/audio.wav').openWrite();
+    sink.add(_buildWavHeader(_audioPcmByteCount, _audioSampleRate));
+    for (final chunk in _audioChunks) {
+      sink.add(chunk);
+    }
+    await sink.flush();
+    await sink.close();
   }
 
   Future<void> _writeMarkersJson(String dir) async {
@@ -370,7 +438,7 @@ class RecordingService extends ChangeNotifier {
     sb.writeln('-' * 20);
     sb.writeln('Dauer:        $m:$sec');
     sb.writeln('IMU-Samples:  ${_imuSamples.length}');
-    sb.writeln('Audio-Smpl.:  ${_audioPcmBytes.length ~/ 2}');
+    sb.writeln('Audio-Smpl.:  ${_audioPcmByteCount ~/ 2}');
     sb.writeln();
     sb.writeln('UNTERGRÜNDE & ZEITMARKER');
     sb.writeln('-' * 20);
@@ -378,17 +446,44 @@ class RecordingService extends ChangeNotifier {
       final corr = mk.isCorrection ? ' [Korrektur]' : '';
       sb.writeln('[${mk.timeLabel}] ${mk.surfaceIndex + 1}. ${mk.surfaceName}$corr');
     }
+    sb.writeln();
+    sb.writeln('INTEGRITÄT');
+    sb.writeln('-' * 20);
+    final stats = _imuIntegrity();
+    final audioMs = ((_audioPcmByteCount ~/ 2) * 1000) ~/ _audioSampleRate;
+    sb.writeln('Pause-Events:       ${_pauseEvents.length}');
+    sb.writeln('IMU-Lücken erkannt: ${stats.gapCount}');
+    sb.writeln('IMU (netto):        ${stats.strippedLastTsMs} ms');
+    sb.writeln('Audio:              $audioMs ms');
+    sb.writeln('Elapsed:            $durationMs ms');
+    final warnings = <String>[];
+    if (_pauseEvents.length != stats.gapCount) {
+      warnings.add('Pause-Events (${_pauseEvents.length}) != IMU-Lücken (${stats.gapCount}) — möglicher BLE-Aussetzer!');
+    }
+    if ((stats.strippedLastTsMs - audioMs).abs() > 2000) {
+      warnings.add('IMU/Audio-Drift > 2s (${stats.strippedLastTsMs - audioMs} ms)');
+    }
+    if ((stats.strippedLastTsMs - durationMs).abs() > 2000) {
+      warnings.add('IMU/Elapsed-Drift > 2s (${stats.strippedLastTsMs - durationMs} ms)');
+    }
+    if (warnings.isEmpty) {
+      sb.writeln('Status:             OK');
+    } else {
+      sb.writeln('Status:             ⚠ WARNUNG');
+      for (final w in warnings) {
+        sb.writeln('  - $w');
+      }
+    }
 
     await File('$dir/session_log.txt').writeAsString(sb.toString());
   }
 
-  // ── WAV helper ────────────────────────────────────────────────────────────
-  static Uint8List _buildWav(List<int> pcmBytes, int sampleRate) {
+  // ── WAV header (44 bytes) — PCM data is streamed separately ─────────────
+  static Uint8List _buildWavHeader(int dataSize, int sampleRate) {
     const numChannels = 1;
     const bitsPerSample = 16;
     final byteRate = sampleRate * numChannels * bitsPerSample ~/ 8;
     const blockAlign = numChannels * bitsPerSample ~/ 8;
-    final dataSize = pcmBytes.length;
     final chunkSize = 36 + dataSize;
 
     final h = ByteData(44);
@@ -410,7 +505,7 @@ class RecordingService extends ChangeNotifier {
     h.setUint8(36, 0x64); h.setUint8(37, 0x61); h.setUint8(38, 0x74); h.setUint8(39, 0x61);
     h.setUint32(40, dataSize, Endian.little);
 
-    return Uint8List.fromList([...h.buffer.asUint8List(), ...pcmBytes]);
+    return h.buffer.asUint8List();
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────

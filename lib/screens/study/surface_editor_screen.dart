@@ -6,6 +6,48 @@ import '../../services/ble_service.dart';
 import '../../services/study_manager.dart';
 import 'recording_screen.dart';
 
+Future<void> showLoadListSheet(
+    BuildContext context, void Function(List<String>) onLoad) async {
+  final mgr = context.read<StudyManager>();
+  final lists = mgr.labelLists;
+  if (lists.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Keine Listen vorhanden — erst im Studie-Tab erstellen')),
+    );
+    return;
+  }
+  await showModalBottomSheet<void>(
+    context: context,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+    builder: (sheetCtx) => Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(20, 16, 16, 8),
+          child: Text('Liste laden',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+        ),
+        const Divider(height: 1),
+        for (final l in lists)
+          ListTile(
+            leading: const Icon(Icons.list_alt, color: Color(0xFF00E5CC)),
+            title: Text(l.name),
+            subtitle: Text('${l.surfaces.length} Untergründe: ${l.surfaces.join(', ')}',
+                maxLines: 1, overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11)),
+            onTap: () {
+              Navigator.pop(sheetCtx);
+              onLoad(List.from(l.surfaces));
+            },
+          ),
+        const SizedBox(height: 8),
+      ],
+    ),
+  );
+}
+
 /// [subject] non-null  → recording flow (shows "Aufnahme starten" button).
 /// [subject] null      → standalone edit mode (accessed from StudyTab).
 class SurfaceEditorScreen extends StatefulWidget {
@@ -174,13 +216,27 @@ class _SurfaceEditorScreenState extends State<SurfaceEditorScreen> {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: Column(
                 children: [
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _addDialog,
-                      icon: const Icon(Icons.add, size: 16),
-                      label: const Text('Untergrund hinzufügen'),
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _addDialog,
+                          icon: const Icon(Icons.add, size: 16),
+                          label: const Text('Hinzufügen'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () => showLoadListSheet(
+                            context,
+                            (surfaces) => setState(() => _list = surfaces),
+                          ),
+                          icon: const Icon(Icons.list_alt, size: 16),
+                          label: const Text('Liste laden'),
+                        ),
+                      ),
+                    ],
                   ),
                   if (_recordingFlow) ...[
                     const SizedBox(height: 10),
